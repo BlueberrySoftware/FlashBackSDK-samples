@@ -1,4 +1,5 @@
 
+
 // 
 // Function uses FBRecorder::ConvertMP4File to convert an MP4 to MKV format
 // Parameters: 
@@ -6,53 +7,62 @@
 //   bVideo - bool - set to true to convert video
 //   bAudio - bool - set to true to convert audio
 // 
-static bool ConvertExportMKV(TFBRecorder pFBRecorder, bool bVideo, bool bAudio)
+bool ConvertExportMKV(FBRecorder::TFBRecorder* pFBRecorder, bool bExportVideo, bool bExportAudio)
 {
     // Get a settings object to get the index of video and audio encoders
-    string sProfile = pFBRecorder.GetConfigJSONForProfile(FBRecorder.TFBRecorder.TFBRecorderProfiles.SAFE_SCREEN);
-    dynamic jsonProfile = JsonConvert.DeserializeObject(sProfile);
+    std::string sProfile = pFBRecorder->GetConfigJSONForProfile(FBRecorder::TFBRecorderProfile::SAFE_SCREEN);
+    json::JSON jsonProfile = json::JSON::Load(sProfile);
 
-    // We will pass the convertSettings object to ConvertMP4File()
-    JObject convertSettings = new JObject();
-    convertSettings["ExportType"] = (int)FBRecorder.TFBRecorder.TExportType.mkv;
+    // We will pass the jsonSettings object to ConvertMP4File()
+    json::JSON jsonSettings;
+    jsonSettings["export_type"] = (int32_t)FBRecorder::TExportType::mkv;
 
-    if (bVideo) {
-        // This video settings object will be passed to ConvertMP4File in convertSettings['VideoEncoderParameters']
-        JObject Params = new JObject();
-
-        int i32VideoEncoderType = -1;//Unknown = 0, MSMF = 1, NativeIntel = 2, NativeNvidia = 3, NativeAMD = 4
-        string sVideoEncoderName = "";
+    if(bVideo)
+    {  
+        // This video settings object will be passed to ConvertMP4File in jsonSettings['VideoEncoderParameters']
+        auto Params = json::JSON();
+        int32_t i32VideoEncoderType = -1;//Unknown = 0, MSMF = 1, NativeIntel = 2, NativeNvidia = 3, NativeAMD = 4
+        std::string sVideoEncoderName = "";
 
         // We are going to iterate over the available video encoders in the settings object
-        dynamic jsonVideoEncoders = jsonProfile["AvailableVideoEncoders"];
-        int i32VideoEncodersCount = jsonVideoEncoders.Count;
+        auto& jsonVideoEncoders = jsonProfile["AvailableVideoEncoders"];
+        int32_t i32VideoEncodersCount = jsonVideoEncoders.size();
 
         // iterate over video encoders and use the Type and Name from the first available one
-        for (int i = 0; i < i32VideoEncodersCount; i++) {
-            dynamic jsonVideoEncoder = jsonVideoEncoders[i];
-            i32VideoEncoderType = jsonVideoEncoder["Type"];
-            sVideoEncoderName = jsonVideoEncoder["Name"];
+        for (auto i = 0; i < i32VideoEncodersCount; i++)
+        {
+            auto& jsonVideoEncoder = jsonVideoEncoders[i];
+            bool bOk = false;
+            i32VideoEncoderType = jsonVideoEncoder["Type"].ToInt(bOk);
 
-            if (pFBRecorder.CheckVideoEncoderAvailability(i32VideoEncoderType, sVideoEncoderName))
-                break; 
+            if (!bOk)
+                continue;
+
+            sVideoEncoderName = jsonVideoEncoder["Name"].ToString(bOk);
+
+            if (!bOk)
+               continue;
+
+            std::wstring wsName = json::utf8_wstring(sVideoEncoderName);
+
+            if (pFBRecorder->CheckVideoEncoderAvailability(i32VideoEncoderType, wsName))
+                break;
 
             i32VideoEncoderType = -1;
             sVideoEncoderName = "";
         }
 
         // Pass the video encoder type and name. This is required, if converting video.
-        Params["VideoEncoder"] = new JObject();
         Params["VideoEncoder"]["Type"] = i32VideoEncoderType;
         Params["VideoEncoder"]["Name"] = sVideoEncoderName;
 
         // Set the other vidoe settings. This is not required - they will default to something sensible, and FPS defaults to 30fps if they are not set here.
-        Params["EnableCabac"] = i32VideoEncoderType != 1; //cabac is not available for MSMF software video encoder
+        Params["EnableCabac"] = i32VideoEncoderType != 1;//cabac is not available for MSMF software video encoder
         Params["H264Profile"] = 77;//Base = 66, Main = 77, High = 100
         Params["BFramesNum"] = 2;
         Params["GOPSize"] = 30;
         Params["QualityLevel"] = 80;
         Params["RefFramesNum"] = 2;
-        Params["FPS"] = new JObject(); // Set 15fps
         Params["FPS"]["Num"] = 15;
         Params["FPS"]["Den"] = 1;
         Params["CompressionMode"] = 1;//bitrate = 0, quality = 1
@@ -61,50 +71,53 @@ static bool ConvertExportMKV(TFBRecorder pFBRecorder, bool bVideo, bool bAudio)
         Params["Width"] = 640;
         Params["Height"] = 480;
 
-        convertSettings["VideoEncoderParameters"] = Params;
+        jsonSettings["VideoEncoderParameters"] = Params;
     }
 
-    if (bAudio) {
+    if (bAudio)
+    {
         // This audio settings object will be passed to ConvertMP4File in convertSettings['AudioEncoderParameters']
-        JObject Params = new JObject();
-        dynamic AudioEncoders = jsonProfile["AudioSettings"]["AvailableAACEncoders"];
+        auto Params = json::JSON();
+        auto& AudioEncoders = jsonProfile["AudioSettings"]["AvailableAACEncoders"];
 
-        if (AudioEncoders.Count == 0) {
-            Console.WriteLine("Audio encoders are not found");
+        if (AudioEncoders.size() == 0)
+        {
+            printf("Audio encoders are not found");
             return false;
         }
 
         //use the first available AAC encoder
-        Params["Type"] = AudioEncoders[0]["Type"];
-        Params["Name"] = AudioEncoders[0]["Name"];
+        Params["Type"] = AudioEncoders[0]["Type"].ToInt();
+        Params["Name"] = AudioEncoders[0]["Name"].ToString();
 
-        convertSettings["AudioEncoderParameters"] = Params;
+        jsonSettings["AudioEncoderParameters"] = Params;
     }
 
-    string sSettings = JsonConvert.SerializeObject(convertSettings);
+    std::string sSettings = jsonSettings.dump();
+    bool bResult = FBRecorder::TFBRecorder::ConvertMP4File(L"D:\\original.mp4", L"D:\\exported.mkv" , -1, -1, sSettings.c_str(), &Progressor);
 
-    bool bResult = FBRecorder.TFBRecorder.ConvertMP4File("D:\\original.MP4", "D:\\exported.mkv", -1, -1, sSettings, new FBRecorder.TFBRecorder.Progressor(Progressor));
-
-    if (!bResult) {
-        Console.WriteLine("ConvertMP4File failed\n");
+    if (!bResult)
+    {
+        printf("ConvertMP4File failed\n");
     }
-    else {
-        Console.WriteLine("ConvertMP4File succeeded\n");
+    else
+    {
+        printf("ConvertMP4File succeeded\n");
     }
 
     return bResult;
 }
 
- 
 
-// 
-// Progressor function used by code in this file.
 //
-static bool Progressor(long i64Current, long i64Total)
+// Progressor function used by sample code. Return false to stop conversion.
+//
+bool Progressor(int64_t i64Current, int64_t i64Total)
 {
-    Console.WriteLine(String.Format("{0} of {1}", i64Current, i64Total));
+    printf("%I64d of %I64d\n", i64Current, i64Total);
     return true;
 }
+ 
 
 
 // 
@@ -116,33 +129,46 @@ static bool Progressor(long i64Current, long i64Total)
 // 
 // Take a look at ConvertExportMKV above for more comments
 //
-static bool ConvertExportAVI(TFBRecorder pFBRecorder, bool bVideo, bool bAudio)
+bool ConvertExportAVI(FBRecorder::TFBRecorder* pFBRecorder, bool bVideo, bool bAudio)
 {
     // Get an FBRecorder setting object to get the index of a video encoder.
-    string sProfile = pFBRecorder.GetConfigJSONForProfile(FBRecorder.TFBRecorder.TFBRecorderProfiles.SAFE_SCREEN);
-    dynamic jsonProfile = JsonConvert.DeserializeObject(sProfile);
+    std::string sProfile = pFBRecorder->GetConfigJSONForProfile(FBRecorder::TFBRecorderProfile::SAFE_SCREEN);
+    json::JSON jsonProfile = json::JSON::Load(sProfile);
 
     // We will pass this settings object to ConvertMP4File
-    JObject jsonSettings = new JObject();
-    jsonSettings["ExportType"] = (int)FBRecorder.TFBRecorder.TExportType.avi;
+    json::JSON jsonSettings;
+    jsonSettings["ExportType"] = (int32_t)FBRecorder::TExportType::avi;
 
     if (bVideo)
     {
-        JObject Params = new JObject();
-            
-        int i32VideoEncoderType = -1;//Unknown = 0, MSMF = 1, NativeIntel = 2, NativeNvidia = 3, NativeAMD = 4
-        string sVideoEncoderName = "";
-        dynamic jsonVideoEncoders = jsonProfile["AvailableVideoEncoders"];
-        int i32VideoEncodersCount = jsonVideoEncoders.Count;
+        auto Params = json::JSON();
+
+        //find any appropriate video encoder
+        int32_t i32VideoEncoderType = -1;//Unknown = 0, MSMF = 1, NativeIntel = 2, NativeNvidia = 3, NativeAMD = 4
+        std::string sVideoEncoderName = "";
+
+        auto& jsonVideoEncoders = jsonProfile["AvailableVideoEncoders"];
+        int32_t i32VideoEncodersCount = jsonVideoEncoders.size();
 
         // Get the index of the first available video encoder
-        for (int i = 0; i < i32VideoEncodersCount; i++)
+        for (auto i = 0; i < i32VideoEncodersCount; i++)
         {
-            dynamic jsonVideoEncoder = jsonVideoEncoders[i];
-            i32VideoEncoderType = jsonVideoEncoder["Type"];
-            sVideoEncoderName = jsonVideoEncoder["Name"];
+            auto& jsonVideoEncoder = jsonVideoEncoders[i];
+            bool bOk = false;
 
-            if (pFBRecorder.CheckVideoEncoderAvailability(i32VideoEncoderType, sVideoEncoderName))
+            i32VideoEncoderType = jsonVideoEncoder["Type"].ToInt(bOk);
+
+            if (!bOk)
+                continue;
+
+            sVideoEncoderName = jsonVideoEncoder["Name"].ToString(bOk);
+
+            if (!bOk)
+                continue;
+
+            std::wstring wsName = json::utf8_wstring(sVideoEncoderName);
+
+            if (pFBRecorder->CheckVideoEncoderAvailability(i32VideoEncoderType, wsName))
                 break;
 
             i32VideoEncoderType = -1;
@@ -150,7 +176,6 @@ static bool ConvertExportAVI(TFBRecorder pFBRecorder, bool bVideo, bool bAudio)
         }
 
         // Set some video parameters. We will pass this to ConvertMP4File in jsonSettings["VideoEncoderParameters"]
-        Params["VideoEncoder"] = new JObject();
         Params["VideoEncoder"]["Type"] = i32VideoEncoderType;
         Params["VideoEncoder"]["Name"] = sVideoEncoderName;
 
@@ -160,39 +185,39 @@ static bool ConvertExportAVI(TFBRecorder pFBRecorder, bool bVideo, bool bAudio)
         Params["GOPSize"] = 30;
         Params["QualityLevel"] = 80;
         Params["RefFramesNum"] = 2;
-        Params["FPS"] = new JObject();
         Params["FPS"]["Num"] = 15;
         Params["FPS"]["Den"] = 1;
         Params["CompressionMode"] = 1;//bitrate = 0, quality = 1
 
         Params["Width"] = 640;
         Params["Height"] = 480;
+
         jsonSettings["VideoEncoderParameters"] = Params;
     }
 
+    // This is different from the MKV export code, which uses AAC audio. For AVI export, a default MP3 encoder is used, so we just pass an empty json object.
     if (bAudio)
     {
-        // This is different from the MKV export code, which uses AAC audio. For AVI export, a default MP3 encoder is used, so we just pass an empty json object.
-        JObject Params = new JObject();
+        auto Params = json::JSON();
         jsonSettings["AudioEncoderParameters"] = Params;
     }
 
-    string sSettings = JsonConvert.SerializeObject(jsonSettings);
-    bool bResult = FBRecorder.TFBRecorder.ConvertMP4File("D:\\original.mp4", "D:\\exported.avi", -1, -1, sSettings, new FBRecorder.TFBRecorder.Progressor(Progressor));
+    std::string sSettings = jsonSettings.dump();
+    bool bResult = FBRecorder::TFBRecorder::ConvertMP4File(L"D:\\buzova.MP4", L"D:\\buzova.avi", -1, -1, sSettings.c_str(), &Progressor);
 
     if (!bResult)
     {
-        Console.WriteLine("ConvertMP4File failed\n");
+        printf("ConvertMP4File failed\n");
     }
     else
     {
-        Console.WriteLine("ConvertMP4File succeeded\n");
+        printf("ConvertMP4File succeeded\n");
     }
 
     return bResult;
 }
 
- 
+
 
 // 
 // Function uses FBRecorder::ConvertMP4File to convert an MP4 to WMV format
@@ -202,26 +227,28 @@ static bool ConvertExportAVI(TFBRecorder pFBRecorder, bool bVideo, bool bAudio)
 //
 // The default Windows encoders for WMV video and WMA audio is used, so unlike MKV and AVI conversion, there is no need to use the FBRecorder settings object to get encoder details.
 // 
-static bool ConvertExportWMV(bool bVideo, bool bAudio)
+bool ConvertExportWMV(FBRecorder::TFBRecorder* pFBRecorder, bool bVideo, bool bAudio)
 {
-    JObject jsonSettings = new JObject();
+    std::string sProfile = pFBRecorder->GetConfigJSONForProfile(FBRecorder::TFBRecorderProfile::SAFE_SCREEN);
+    json::JSON jsonProfile = json::JSON::Load(sProfile);
 
-    jsonSettings["ExportType"] = (int)FBRecorder.TFBRecorder.TExportType.wmv;
+    json::JSON jsonSettings;
+    jsonSettings["ExportType"] = (int32_t)FBRecorder::TExportType::wmv;
 
-    // WMV conversion uses the default Windows WMV encoder, so we don't need to specify an encoder, only - optionally - the dimensions, fps, quality
+    // WMV conversion uses the default Windows WMV encoder, so we don't need to pass encoder Type and Name, only - optionally - the dimensions, fps, quality
     if (bVideo)
     {
-        JObject Params = new JObject();
+        auto Params = json::JSON();
+        Params["VideoEncoder"]["Type"] = -1;
+        Params["VideoEncoder"]["Name"] = "";
 
         // Width and Height default to -1, which keeps the dimensions of the original video
         Params["Width"] = 640;
         Params["Height"] = 480;
 
         // FPS defaults to 30
-        Params["FPS"] = new JObject();
-        Params["FPS"]["Num"] = 15; 
+        Params["FPS"]["Num"] = 15;
         Params["FPS"]["Den"] = 1;
-
         Params["CompressionMode"] = 1;//bitrate = 0, quality = 1
         Params["BitrateKbps"] = 1000;
 
@@ -235,140 +262,136 @@ static bool ConvertExportWMV(bool bVideo, bool bAudio)
     // WMV conversion uses a default Windows WMA encoder, so we only need pass an empty object - no need to specify an AAC audio encoder as in MKV conversion. 
     if (bAudio)
     {
-        JObject Params = new JObject();
+        auto Params = json::JSON();
         jsonSettings["AudioEncoderParameters"] = Params;
     }
 
-    string sSettings = JsonConvert.SerializeObject(jsonSettings);
-    bool bResult = FBRecorder.TFBRecorder.ConvertMP4File("D:\\original.mp4", "D:\\exported.wmv", -1, -1, sSettings, new FBRecorder.TFBRecorder.Progressor(Progressor));
+    std::string sSettings = jsonSettings.dump();
+    bool bResult = FBRecorder::TFBRecorder::ConvertMP4File(L"D:\\original.mp4", L"D:\\exported.wmv", -1, -1, sSettings.c_str(), &Progressor);
 
     if (!bResult)
     {
-        Console.WriteLine("ConvertMP4File failed\n");
+        printf("ConvertMP4File failed\n");
     }
     else
     {
-        Console.WriteLine("ConvertMP4File succeeded\n");
+        printf("ConvertMP4File succeeded\n");
     }
 
     return bResult;
 }
 
- 
+
 
 // 
 // Function uses FBRecorder::ConvertMP4File to convert an MP4 to WMV format
-// There is no need to specify a video encoder 
 //
-static bool ConvertExportGIF()
+bool ConvertExportGIF(FBRecorder::TFBRecorder* pFBRecorder)
 {
-    JObject jsonSettings = new JObject();
-    jsonSettings["ExportType"] = (int)FBRecorder.TFBRecorder.TExportType.gif;
+    std::string sProfile = pFBRecorder->GetConfigJSONForProfile(FBRecorder::TFBRecorderProfile::SAFE_SCREEN);
+    json::JSON jsonProfile = json::JSON::Load(sProfile);
 
     // No need to specify an H264 encoder for GIF conversion. We just set the dimensions and FPS. 
-    JObject Params = new JObject();
+    json::JSON jsonSettings;
+    jsonSettings["ExportType"] = (int32_t)FBRecorder::TExportType::gif;
 
+    auto Params = json::JSON();
     Params["Width"] = 640;
     Params["Height"] = 480;
 
-    Params["FPS"] = new JObject();
     Params["FPS"]["Num"] = 2;
     Params["FPS"]["Den"] = 1;
 
     jsonSettings["VideoEncoderParameters"] = Params;
 
-
-    string sSettings = JsonConvert.SerializeObject(jsonSettings);
-    bool bResult = FBRecorder.TFBRecorder.ConvertMP4File("D:\\original.mp4", "D:\\exported.gif", -1, -1, sSettings, new FBRecorder.TFBRecorder.Progressor(Progressor));
+    std::string sSettings = jsonSettings.dump();
+    bool bResult = FBRecorder::TFBRecorder::ConvertMP4File(L"D:\\original.mp4", L"D:\\exported.gif", -1, -1, sSettings.c_str(), &Progressor);
 
     if (!bResult)
     {
-        Console.WriteLine("ConvertMP4File failed\n");
+        printf("ConvertMP4File failed\n");
     }
     else
     {
-        Console.WriteLine("ConvertMP4File succeeded\n");
+        printf("ConvertMP4File succeeded\n");
     }
 
     return bResult;
 }
 
+
+
  
+
 // 
 // Function - converts the audio in the MP4 file to an AAC file
 //
-static bool ConvertExportAAC(TFBRecorder pFBRecorder)
+bool ConvertExportAAC(FBRecorder::TFBRecorder* pFBRecorder)
 {
     // Use the settings object to get the details of an AAC encoder. 
-    string sProfile = pFBRecorder.GetConfigJSONForProfile(FBRecorder.TFBRecorder.TFBRecorderProfiles.SAFE_SCREEN);
-    dynamic jsonProfile = JsonConvert.DeserializeObject(sProfile);
+    std::string sProfile = pFBRecorder->GetConfigJSONForProfile(FBRecorder::TFBRecorderProfile::SAFE_SCREEN);
+    json::JSON jsonProfile = json::JSON::Load(sProfile);
+    
+    json::JSON jsonSettings;
+    jsonSettings["export_type"] = (int32_t)FBRecorder::TExportType::aac;
 
-    JObject jsonSettings = new JObject();
-    jsonSettings["ExportType"] = (int)FBRecorder.TFBRecorder.TExportType.aac;
-
-    JObject Params = new JObject();
+    auto Params = json::JSON();
 
     // Get an AAC encoder from the settings object
-    dynamic AudioEncoders = jsonProfile["AudioSettings"]["AvailableAACEncoders"];
+    auto& AudioEncoders = jsonProfile["AudioSettings"]["AvailableAACEncoders"];
 
-    if (AudioEncoders.Count == 0)
+    if (AudioEncoders.size() == 0)
     {
-        Console.WriteLine("Audio encoders are not found");
+        printf("Audio encoders are not found");
         return false;
     }
 
     // Use the first available AAC encoder
-    Params["Type"] = AudioEncoders[0]["Type"];
-    Params["Name"] = AudioEncoders[0]["Name"];
+    Params["Type"] = AudioEncoders[0]["Type"].ToInt();
+    Params["Name"] = AudioEncoders[0]["Name"].ToString();
 
     jsonSettings["AudioEncoderParameters"] = Params;
 
-    string sSettings = JsonConvert.SerializeObject(jsonSettings);
-    bool bResult = FBRecorder.TFBRecorder.ConvertMP4File("D:\\original.mp4", "D:\\exported.aac", -1, -1, sSettings, new FBRecorder.TFBRecorder.Progressor(Progressor));
+    std::string sSettings = jsonSettings.dump();
+    bool bResult = FBRecorder::TFBRecorder::ConvertMP4File(L"D:\\buzova.MP4", L"D:\\buzova.aac", -1, -1, sSettings.c_str(), &Progressor);
 
     if (!bResult)
     {
-        Console.WriteLine("ConvertMP4File failed\n");
+        printf("ConvertMP4File failed\n");
     }
     else
     {
-        Console.WriteLine("ConvertMP4File succeeded\n");
+        printf("ConvertMP4File succeeded\n");
     }
 
     return bResult;
 }
 
- 
+
 
 // 
 // Function - converts the audio in the MP4 file to an MP3 file
 //
-static bool ConvertExportMP3()
+bool ConvertExportMP3()
 {
-    JObject jsonSettings = new JObject();
+    json::JSON jsonSettings;
 
-    jsonSettings["ExportType"] = (int)FBRecorder.TFBRecorder.TExportType.mp3;
+    jsonSettings["ExportType"] = (int32_t)FBRecorder::TExportType::mp3;
 
     // ConvertMP4File uses a default Windows MP3 encoder, so no details of an encoder need be passed over, just an empty object
-    jsonSettings["AudioEncoderParameters"] = new JObject();
+    jsonSettings["AudioEncoderParameters"] = json::JSON();
 
-    string sSettings = JsonConvert.SerializeObject(jsonSettings);
-    bool bResult = FBRecorder.TFBRecorder.ConvertMP4File("D:\\original.mp4", "D:\\exported.mp3", -1, -1, sSettings, new FBRecorder.TFBRecorder.Progressor(Progressor));
+    std::string sSettings = jsonSettings.dump();
+    bool bResult = FBRecorder::TFBRecorder::ConvertMP4File(L"D:\\original.mp4", L"D:\\exported.mp3", -1, -1, sSettings.c_str(), &Progressor);
 
     if (!bResult)
     {
-        Console.WriteLine("ConvertMP4File failed\n");
+        printf("ConvertMP4File failed\n");
     }
     else
     {
-        Console.WriteLine("ConvertMP4File succeeded\n");
+        printf("ConvertMP4File succeeded\n");
     }
 
     return bResult;
 }
-
-
-
- 
-
- 
